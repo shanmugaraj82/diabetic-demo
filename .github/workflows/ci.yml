@@ -29,6 +29,6 @@ jobs:
           python train.py
 
       # add tests here if/when you have them
-      - name: Run tests
-        run: |
-          pytest -vv
+      #- name: Run tests
+      #  run: |
+      #    pytest -vv

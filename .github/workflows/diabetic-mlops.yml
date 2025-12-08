@@ -1,0 +1,114 @@
+name: First MLOps Project - CI/CD to EKS
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  # ---- UPDATE THESE FOR YOUR AWS ACCOUNT/CLUSTER ----
+  AWS_REGION: us-east-1               # e.g. us-east-1
+  ECR_REPOSITORY: diabetes-api        # create this ECR repo in your AWS account
+  EKS_CLUSTER_NAME: my-eks-cluster    # existing EKS cluster name
+  EKS_NAMESPACE: default              # or mlops, etc.
+
+jobs:
+  build-and-push-ecr:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 1) Install deps & train model so the .pkl is included in the image
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Train model
+        run: |
+          python train.py
+
+      # 2) Configure AWS credentials (you can switch to OIDC/role later)
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # 3) Login to Amazon ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # 4) Build and push image to ECR
+      - name: Build, tag and push image to ECR
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: ${{ env.ECR_REPOSITORY }}
+          IMAGE_TAG: latest
+        run: |
+          echo "Building image $REGISTRY/$REPOSITORY:$IMAGE_TAG"
+          docker build -t $REGISTRY/$REPOSITORY:$IMAGE_TAG .
+          docker push $REGISTRY/$REPOSITORY:$IMAGE_TAG
+
+  deploy-to-eks:
+    runs-on: ubuntu-latest
+    needs: build-and-push-ecr
+    # Only auto-deploy on pushes to main (not PRs)
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig for EKS
+        run: |
+          aws eks update-kubeconfig \
+            --name "$EKS_CLUSTER_NAME" \
+            --region "$AWS_REGION"
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Deploy to EKS
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: ${{ env.ECR_REPOSITORY }}
+          IMAGE_TAG: latest
+          NAMESPACE: ${{ env.EKS_NAMESPACE }}
+        run: |
+          # Apply the Kubernetes manifests (Deployment + Service)
+          # k8s-deploy.yml currently uses a DockerHub image placeholder. :contentReference[oaicite:1]{index=1}
+          kubectl apply -f k8s-deploy.yml -n "$NAMESPACE"
+
+          # Override the image to point to ECR
+          IMAGE_URI="$REGISTRY/$REPOSITORY:$IMAGE_TAG"
+          echo "Updating deployment image to $IMAGE_URI"
+
+          kubectl set image deployment/diabetes-api \
+            diabetes-api="$IMAGE_URI" \
+            -n "$NAMESPACE"
+
+          echo "Waiting for rollout..."
+          kubectl rollout status deployment/diabetes-api -n "$NAMESPACE"
+
+          echo "Services in namespace:"
+          kubectl get svc -n "$NAMESPACE"

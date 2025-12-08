@@ -8,7 +8,7 @@ on:
 env:
   AWS_REGION: us-east-1                # <--- adjust if needed
   ECR_REPOSITORY: diabetes-api         # <--- your ECR repo name
-  EKS_CLUSTER_NAME: diabetes-eks     # <--- your EKS cluster name
+  EKS_CLUSTER_NAME: diabetic-eks     # <--- your EKS cluster name
   EKS_NAMESPACE: default               # or mlops, etc.
 
 jobs:

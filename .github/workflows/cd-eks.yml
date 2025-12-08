@@ -6,14 +6,17 @@ on:
   workflow_dispatch:
 
 env:
-  AWS_REGION: us-east-1                # <--- adjust if needed
-  ECR_REPOSITORY: diabetes-api         # <--- your ECR repo name
-  EKS_CLUSTER_NAME: diabetic-eks     # <--- your EKS cluster name
-  EKS_NAMESPACE: default               # or mlops, etc.
+  AWS_REGION: us-east-1                 # <--- update if different
+  ECR_REPOSITORY: diabetes-api          # <--- your ECR repo name
+  EKS_CLUSTER_NAME: diabetic-eks      # <--- your EKS cluster name
+  EKS_NAMESPACE: default                # <--- or mlops, etc.
 
 jobs:
   build-and-push-ecr:
     runs-on: ubuntu-latest
+
+    outputs:
+      image_uri: ${{ steps.build.outputs.image_uri }}
 
     steps:
       - name: Checkout code
@@ -49,23 +52,24 @@ jobs:
             aws ecr create-repository --repository-name "$REPOSITORY"
 
       - name: Build, tag and push image to ECR
+        id: build
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           REPOSITORY: ${{ env.ECR_REPOSITORY }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
+          set -e
           IMAGE_URI="$REGISTRY/$REPOSITORY:$IMAGE_TAG"
           echo "Building image $IMAGE_URI"
+
           docker build -t "$IMAGE_URI" .
           docker push "$IMAGE_URI"
+
           # also push 'latest' for convenience
           docker tag "$IMAGE_URI" "$REGISTRY/$REPOSITORY:latest"
           docker push "$REGISTRY/$REPOSITORY:latest"
 
-      - name: Export image uri
-        id: img
-        run: |
-          echo "image_uri=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
 
   deploy-to-eks:
     runs-on: ubuntu-latest
@@ -88,26 +92,68 @@ jobs:
             --name "$EKS_CLUSTER_NAME" \
             --region "$AWS_REGION"
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+      - name: Install Helm
+        run: |
+          curl -L https://get.helm.sh/helm-v3.15.4-linux-amd64.tar.gz -o helm.tar.gz
+          tar -zxvf helm.tar.gz
+          sudo mv linux-amd64/helm /usr/local/bin/helm
 
-      - name: Deploy to EKS
+      - name: Ensure AWS Load Balancer Controller is installed
         env:
-          IMAGE_TAG: ${{ github.sha }}
-          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          REPOSITORY: ${{ env.ECR_REPOSITORY }}
+          CLUSTER_NAME: ${{ env.EKS_CLUSTER_NAME }}
+          AWS_REGION: ${{ env.AWS_REGION }}
+          AWS_LBC_ROLE_ARN: ${{ secrets.AWS_LBC_ROLE_ARN }}
+        run: |
+          set -e
+
+          if kubectl get deployment aws-load-balancer-controller -n kube-system >/dev/null 2>&1; then
+            echo "AWS Load Balancer Controller already installed, skipping."
+          else
+            echo "Installing AWS Load Balancer Controller..."
+
+            VPC_ID=$(aws eks describe-cluster \
+              --name "$CLUSTER_NAME" \
+              --region "$AWS_REGION" \
+              --query "cluster.resourcesVpcConfig.vpcId" \
+              --output text)
+
+            echo "Using VPC ID: $VPC_ID"
+
+            helm repo add eks https://aws.github.io/eks-charts
+            helm repo update
+
+            helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller \
+              -n kube-system \
+              --create-namespace \
+              --set clusterName="$CLUSTER_NAME" \
+              --set region="$AWS_REGION" \
+              --set vpcId="$VPC_ID" \
+              --set serviceAccount.create=true \
+              --set serviceAccount.name=aws-load-balancer-controller \
+              --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="$AWS_LBC_ROLE_ARN"
+
+            kubectl rollout status deployment/aws-load-balancer-controller -n kube-system
+          fi
+
+      - name: Deploy application & ingress
+        env:
+          IMAGE_URI: ${{ needs.build-and-push-ecr.outputs.image_uri }}
           NAMESPACE: ${{ env.EKS_NAMESPACE }}
         run: |
-          # Apply manifests
-          kubectl apply -n "$NAMESPACE" -f k8s-deploy.yml
+          set -e
 
-          # Set image to new build
-          IMAGE_URI="$REGISTRY/$REPOSITORY:$IMAGE_TAG"
-          echo "Updating deployment image to $IMAGE_URI"
+          kubectl get ns "$NAMESPACE" >/dev/null 2>&1 || kubectl create ns "$NAMESPACE"
+
+          kubectl apply -n "$NAMESPACE" -f k8s-deploy.yml
+          kubectl apply -n "$NAMESPACE" -f k8s-ingress.yml
+
+          echo "Setting deployment image to $IMAGE_URI"
           kubectl set image deployment/diabetes-api \
             diabetes-api="$IMAGE_URI" \
             -n "$NAMESPACE"
 
-          echo "Waiting for rollout..."
+          echo "Waiting for deployment rollout..."
           kubectl rollout status deployment/diabetes-api -n "$NAMESPACE"
+
+          echo "Current ingress:"
+          kubectl get ingress -n "$NAMESPACE"

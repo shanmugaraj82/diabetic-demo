@@ -1,4 +1,4 @@
-name: First MLOps Project - CI/CD to EKS
+name: Diabetic MLOps Project - CI/CD to EKS
 
 on:
   push:

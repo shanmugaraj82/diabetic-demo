@@ -1,11 +1,15 @@
 name: Diabetic MLOps Project - CI/CD to EKS
 
+# automatic trigger on push/pr
+#on:
+#  push:
+#    branches: [ main ]
+#  pull_request:
+#    branches: [ main ]
+#  workflow_dispatch:
+
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:
+  workflow_dispatch: {}   # Run manually from GitHub Actions UI
 
 env:
   # ---- UPDATE THESE FOR YOUR AWS ACCOUNT/CLUSTER ----

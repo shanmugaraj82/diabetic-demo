@@ -3,3 +3,4 @@ uvicorn[standard]
 scikit-learn
 pandas
 joblib
+prometheus-fastapi-instrumentator

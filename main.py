@@ -1,10 +1,19 @@
 # main.py
 from fastapi import FastAPI
+from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel
 import joblib
 import numpy as np
 
 app = FastAPI()
+
+# Instrument Prometheus metrics
+Instrumentator().instrument(app).expose(
+    app,
+    endpoint="/metrics",          # <-- Prometheus will scrape this
+    include_in_schema=False
+)
+
 model = joblib.load("diabetes_model.pkl")
 
 class DiabetesInput(BaseModel):

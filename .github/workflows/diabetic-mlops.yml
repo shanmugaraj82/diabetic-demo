@@ -15,7 +15,7 @@ env:
   # ---- UPDATE THESE FOR YOUR AWS ACCOUNT/CLUSTER ----
   AWS_REGION: us-east-1               # e.g. us-east-1
   ECR_REPOSITORY: diabetes-api        # create this ECR repo in your AWS account
-  EKS_CLUSTER_NAME: diabetic-eks    # existing EKS cluster name
+  EKS_CLUSTER_NAME: diabetic2-eks-cluster    # existing EKS cluster name
   EKS_NAMESPACE: default              # or mlops, etc.
 
 jobs:

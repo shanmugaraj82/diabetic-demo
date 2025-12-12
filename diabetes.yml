@@ -1,0 +1,26 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: diabetes-api
+  namespace: argocd
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/shanmugaraj82/diabetic-demo.git
+    targetRevision: main
+    path: .
+    kustomize:
+      images:
+        - diabetes-api=202020202020.dkr.ecr.us-east-1.amazonaws.com/diabetes-api:latest
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: diabetes-api
+
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+    syncOptions:
+      - CreateNamespace=true
